@@ -1,0 +1,17 @@
+services:
+  ros-shape-state-estimation:
+    image: ros-shape-state-estimation:humble
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    network_mode: "host"
+    ipc: host
+    pid: host
+    devices:
+      - /dev/ttyUSB0
+    privileged: true
+    environment:
+      - UID=${HOST_UID}
+      - ROS_DOMAIN_ID
+    command: su - ros --whitelist-environment=ROS_DOMAIN_ID /run.sh
