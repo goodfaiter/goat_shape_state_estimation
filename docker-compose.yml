@@ -14,4 +14,10 @@ services:
     environment:
       - UID=${HOST_UID}
       - ROS_DOMAIN_ID
-    command: su - ros --whitelist-environment=ROS_DOMAIN_ID /run.sh
+    # command: su - ros --whitelist-environment=ROS_DOMAIN_ID /run.sh
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${HOME}/.Xauthority:/root/.Xauthority
+      - ./:/workspace
+      - $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/tmp/$WAYLAND_DISPLAY
+    command: tail -f /dev/null

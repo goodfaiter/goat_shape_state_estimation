@@ -52,10 +52,14 @@ from .dynamixel_controller import Dynamixel
         data_tensor[:, 20] = torch.tensor(data["/tendon_length_node_2/tendon_length/data"], dtype=torch.float, device=self.device)
 
 
+NUM_INPUTS = 21
+NUM_OUTPUTS = 12 * 3 + 3 + 3 + 3
+
 class GoatShapeStateEstimation(Node):
     def __init__(self):
         super().__init__('goat_shape_state_estimation')
 
+        # Subscribers
         imu_data_topic = self.declare_parameter("imu_data_topic", "/imu/data").get_parameter_value().string_value
         commanded_velocity_topic = self.declare_parameter("commanded_velocity_topic", "/commanded_velocity").get_parameter_value().string_value
         measured_velocity_topic = self.declare_parameter("measured_velocity_topic", "/measured_velocity").get_parameter_value().string_value
@@ -70,30 +74,39 @@ class GoatShapeStateEstimation(Node):
         self.tendon_length_1_subscription = self.create_subscription(Float32MultiArray, tendon_length_1_topic, self.tendon_length_1_callback, 10)
         self.tendon_length_2_subscription = self.create_subscription(Float32MultiArray, tendon_length_2_topic, self.tendon_length_2_callback, 10)
 
-        self.imu_data_tensor = torch.zeroes((21), dtype=torch.float, device='cpu')
-
-
         model_path = self.declare_parameter('model_path', 'colon_ws/goat_shape_state_estimation/models/latest.pt').get_parameter_value().string
         self._model = torch.jit.load(model_path, map_location="cpu")
-        self._input = torch.zeroes((1, 1, 21), dtype=torch.float, device='cpu')
+        self._input = torch.zeroes((1, 1, NUM_INPUTS), dtype=torch.float, device='cpu')
+        self._output = torch.zeroes((1, 1, NUM_OUTPUTS), dtype=torch.float, device='cpu')
 
-        # publisher for points
-        # publisher for gravity
-        # publisher for lin vel
-        # publisher for ang vel
+        # Publishers
+        frame_points_topic = self.declare_parameter("frame_points_topic", "/frame_points").get_parameter_value().string_value
+        gravity_vector_topic = self.declare_parameter("gravity_vector_topic", "/gravity_vector").get_parameter_value().string_value
+        linear_velocity_topic = self.declare_parameter("linear_velocity_topic", "/linear_velocity").get_parameter_value().string_value
+        angular_velocity_topic = self.declare_parameter("angular_velocity_topic", "/angular_velocity").get_parameter_value().string_value
+
+        frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
+        gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
+        linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
+        angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
 
         timer_period = 0.05  # seconds -> 20Hz
-        self.state_timer = self.create_timer(timer_period, self.state_callback)
-
+        self.shape_state_estimation_timer = self.create_timer(timer_period, self.shape_state_estimation_callback)
 
     def imu_data_callback(self, msg: Float32MultiArray):
         linear_velocity = 0.0
         angular_velocity = 0.0
 
-    def state_callback(self):
-        # fill out self._input
-        output = self._model(self._input)
-        output = output.cpu().numpy()
+    def shape_state_estimation_callback(self):
+        self._output[:] = self._model(self._input)
+        output_numpy = output.cpu().numpy()
+
+        frame_points_msg = Float32MultiArray()
+        gravity_vector_msg = Float32MultiArray()
+        linear_velocity_msg = Float32MultiArray()
+        angular_velocity_msg = Float32MultiArray()
+        measured_velocity_msg.data = wheel_velocity
+        self.measured_velocity_publisher.publish(measured_velocity_msg)
         # publish
 
 

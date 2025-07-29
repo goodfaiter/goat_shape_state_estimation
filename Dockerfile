@@ -15,19 +15,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-COPY ros_entrypoint.sh /ros_entrypoint.sh
+# Create workspace
+RUN apt-get update && apt-get install -y git
+RUN mkdir workspace
+WORKDIR /workspace
 
-WORKDIR /colcon_ws
+# COPY ros_entrypoint.sh /ros_entrypoint.sh
 
-COPY ./goat_shape_state_estimation src/goat_shape_state_estimation 
+# WORKDIR /colcon_ws
 
-RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
-    colcon build --symlink-install --event-handlers console_direct+ --cmake-args ' -DCMAKE_BUILD_TYPE=Release'
+# COPY ./goat_shape_state_estimation src/goat_shape_state_estimation 
 
-# Set package's launch command
-ENV LAUNCH_COMMAND='ros2 run goat_shape_state_estimation goat_shape_state_estimation'
+# RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
+#     colcon build --symlink-install --event-handlers console_direct+ --cmake-args ' -DCMAKE_BUILD_TYPE=Release'
 
-# Create build and run aliases
-RUN echo 'alias build="colcon build --symlink-install  --event-handlers console_direct+"' >> /etc/bash.bashrc && \
-    echo 'alias run="su - ros --whitelist-environment=\"ROS_DOMAIN_ID\" /run.sh"' >> /etc/bash.bashrc && \
-    echo "source /colcon_ws/install/setup.bash; echo UID: $UID; echo ROS_DOMAIN_ID: $ROS_DOMAIN_ID; $LAUNCH_COMMAND" >> /run.sh && chmod +x /run.sh
+# # Set package's launch command
+# ENV LAUNCH_COMMAND='ros2 run goat_shape_state_estimation goat_shape_state_estimation'
+
+# # Create build and run aliases
+# RUN echo 'alias build="colcon build --symlink-install  --event-handlers console_direct+"' >> /etc/bash.bashrc && \
+#     echo 'alias run="su - ros --whitelist-environment=\"ROS_DOMAIN_ID\" /run.sh"' >> /etc/bash.bashrc && \
+#     echo "source /colcon_ws/install/setup.bash; echo UID: $UID; echo ROS_DOMAIN_ID: $ROS_DOMAIN_ID; $LAUNCH_COMMAND" >> /run.sh && chmod +x /run.sh
