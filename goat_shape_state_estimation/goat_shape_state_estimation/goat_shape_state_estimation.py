@@ -1,4 +1,5 @@
 import torch
+from torch import ScriptModule
 import pandas as pd
 import numpy as np
 from helpers.data_processer import DataProcessorGoat
@@ -53,7 +54,12 @@ from .dynamixel_controller import Dynamixel
 
 
 NUM_INPUTS = 21
-NUM_OUTPUTS = 12 * 3 + 3 + 3 + 3
+NUM_POINTS = 12
+NUM_OUTPUTS = NUM_POINTS * 3 + 3 + 3 + 3
+INDEX_POINTS = 0
+INDEX_GRAVITY = INDEX_POINTS * 3
+INDEX_LINEAR_VELOCITY = INDEX_GRAVITY + 3
+INDEX_ANGULAR_VELOCITY = INDEX_LINEAR_VELOCITY + 3
 
 class GoatShapeStateEstimation(Node):
     def __init__(self):
@@ -75,7 +81,7 @@ class GoatShapeStateEstimation(Node):
         self.tendon_length_2_subscription = self.create_subscription(Float32MultiArray, tendon_length_2_topic, self.tendon_length_2_callback, 10)
 
         model_path = self.declare_parameter('model_path', 'colon_ws/goat_shape_state_estimation/models/latest.pt').get_parameter_value().string
-        self._model = torch.jit.load(model_path, map_location="cpu")
+        self._model: ScriptModule = torch.jit.load(model_path, map_location="cpu")
         self._input = torch.zeroes((1, 1, NUM_INPUTS), dtype=torch.float, device='cpu')
         self._output = torch.zeroes((1, 1, NUM_OUTPUTS), dtype=torch.float, device='cpu')
 
@@ -85,10 +91,10 @@ class GoatShapeStateEstimation(Node):
         linear_velocity_topic = self.declare_parameter("linear_velocity_topic", "/linear_velocity").get_parameter_value().string_value
         angular_velocity_topic = self.declare_parameter("angular_velocity_topic", "/angular_velocity").get_parameter_value().string_value
 
-        frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
-        gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
-        linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
-        angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
+        self.frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
+        self.gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
+        self.linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
+        self.angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
 
         timer_period = 0.05  # seconds -> 20Hz
         self.shape_state_estimation_timer = self.create_timer(timer_period, self.shape_state_estimation_callback)
@@ -98,16 +104,21 @@ class GoatShapeStateEstimation(Node):
         angular_velocity = 0.0
 
     def shape_state_estimation_callback(self):
-        self._output[:] = self._model(self._input)
+        self._output[:] = self._model(self._input).squeeze().squeeze()
         output_numpy = output.cpu().numpy()
 
         frame_points_msg = Float32MultiArray()
         gravity_vector_msg = Float32MultiArray()
         linear_velocity_msg = Float32MultiArray()
         angular_velocity_msg = Float32MultiArray()
-        measured_velocity_msg.data = wheel_velocity
-        self.measured_velocity_publisher.publish(measured_velocity_msg)
-        # publish
+        frame_points_msg.data = output_numpy[:INDEX_GRAVITY]
+        gravity_vector_msg.data = output_numpy[INDEX_GRAVITY:INDEX_LINEAR_VELOCITY]
+        linear_velocity_msg.data = output_numpy[INDEX_LINEAR_VELOCITY:INDEX_ANGULAR_VELOCITY]
+        angular_velocity_msg.data = output_numpy[INDEX_ANGULAR_VELOCITY:]
+        self.frame_points_publisher.publish(frame_points_msg)
+        self.gravity_vector_publisher.publish(gravity_vector_msg)
+        self.linear_velocity_publisher.publish(linear_velocity_msg)
+        self.angular_velocity_publisher.publish(angular_velocity_msg)
 
 
 def main(args=None):
