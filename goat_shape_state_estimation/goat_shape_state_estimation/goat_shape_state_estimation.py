@@ -1,65 +1,26 @@
 import torch
-from torch import ScriptModule
-import pandas as pd
-import numpy as np
-from helpers.data_processer import DataProcessorGoat
-from helpers.visualizer import visualize_3d_spline, plot_velocity_comparison
-
-
+from torch import ScriptModule, Tensor
+import roma
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Joy
-from std_msgs.msg import Float32MultiArray
-
-from .dynamixel_controller import Dynamixel
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Float32MultiArray, Float32
 
 
-
-        num_data = data["/imu/data/orientation_w"].size
-        data_tensor = torch.zeros([num_data, self.input_shape], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat = torch.zeros([num_data, 4], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 0] = torch.tensor(data["/imu/data/orientation_x"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 1] = torch.tensor(data["/imu/data/orientation_y"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 2] = torch.tensor(data["/imu/data/orientation_z"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 3] = torch.tensor(data["/imu/data/orientation_w"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_rotmat = roma.unitquat_to_rotmat(robot_rot_orientation_quat)
-        data_tensor[:, 0:3] = robot_rot_orientation_rotmat[:, :, 2]  # this is essentially rot_mat * [0 0 1].T
-        # data_tensor[:, 0:3] = ema_2d_optimized(data_tensor[:, 0:3])
-
-        data_tensor[:, 3] = torch.tensor(data["/imu/data/angular_velocity_x"], dtype=torch.float, device=self.device)
-        data_tensor[:, 4] = torch.tensor(data["/imu/data/angular_velocity_y"], dtype=torch.float, device=self.device)
-        data_tensor[:, 5] = torch.tensor(data["/imu/data/angular_velocity_z"], dtype=torch.float, device=self.device)
-        # data_tensor[:, 3:6] = ema_2d_optimized(data_tensor[:, 3:6])
-
-        data_tensor[:, 6] = torch.tensor(data["/imu/data/linear_acceleration_x"], dtype=torch.float, device=self.device)
-        data_tensor[:, 7] = torch.tensor(data["/imu/data/linear_acceleration_y"], dtype=torch.float, device=self.device)
-        data_tensor[:, 8] = torch.tensor(data["/imu/data/linear_acceleration_z"], dtype=torch.float, device=self.device)
-        # data_tensor[:, 6:9] = ema_2d_optimized(data_tensor[:, 6:9])
-
-        data_tensor[:, 9] = torch.tensor(data["/measured_velocity/data_0"], dtype=torch.float, device=self.device)
-        data_tensor[:, 10] = torch.tensor(data["/measured_velocity/data_1"], dtype=torch.float, device=self.device)
-        data_tensor[:, 11] = torch.tensor(data["/measured_velocity/data_2"], dtype=torch.float, device=self.device)
-        data_tensor[:, 12] = torch.tensor(data["/measured_velocity/data_3"], dtype=torch.float, device=self.device)
-
-        data_tensor[:, 13] = torch.tensor(data["/commanded_velocity/data_0"], dtype=torch.float, device=self.device)
-        data_tensor[:, 14] = torch.tensor(data["/commanded_velocity/data_1"], dtype=torch.float, device=self.device)
-
-        data_tensor[:, 15] = torch.tensor(data["/current_consumption/data_0"], dtype=torch.float, device=self.device)
-        data_tensor[:, 16] = torch.tensor(data["/current_consumption/data_1"], dtype=torch.float, device=self.device)
-        data_tensor[:, 17] = torch.tensor(data["/current_consumption/data_2"], dtype=torch.float, device=self.device)
-        data_tensor[:, 18] = torch.tensor(data["/current_consumption/data_3"], dtype=torch.float, device=self.device)
-
-        data_tensor[:, 19] = torch.tensor(data["/tendon_length_node_1/tendon_length/data"], dtype=torch.float, device=self.device)
-        data_tensor[:, 20] = torch.tensor(data["/tendon_length_node_2/tendon_length/data"], dtype=torch.float, device=self.device)
-
-
-NUM_INPUTS = 21
+INDEX_IMU_ANGULAR_VELOCITY = 3
+INDEX_LINEAR_ACCELERATION = INDEX_IMU_ANGULAR_VELOCITY + 3
+INDEX_MEASURED_WHEEL_VELOCITY = INDEX_LINEAR_ACCELERATION + 3
+INDEX_COMMANDED_VELOCITY = INDEX_MEASURED_WHEEL_VELOCITY + 4
+INDEX_WHEEL_CURRENT_CONSUMPTION = INDEX_COMMANDED_VELOCITY + 2
+INDEX_TENDON_LENGTH_1 = INDEX_WHEEL_CURRENT_CONSUMPTION + 4
+INDEX_TENDON_LENGTH_2 = INDEX_TENDON_LENGTH_1 + 1
+NUM_INPUTS = INDEX_TENDON_LENGTH_2 + 1
 NUM_POINTS = 12
-NUM_OUTPUTS = NUM_POINTS * 3 + 3 + 3 + 3
 INDEX_POINTS = 0
-INDEX_GRAVITY = INDEX_POINTS * 3
+INDEX_GRAVITY = NUM_POINTS * 3
 INDEX_LINEAR_VELOCITY = INDEX_GRAVITY + 3
 INDEX_ANGULAR_VELOCITY = INDEX_LINEAR_VELOCITY + 3
+NUM_OUTPUTS = INDEX_ANGULAR_VELOCITY + 3
 
 class GoatShapeStateEstimation(Node):
     def __init__(self):
@@ -73,17 +34,18 @@ class GoatShapeStateEstimation(Node):
         tendon_length_1_topic = self.declare_parameter("tendon_length_topic_1", "/tendon_length_node_1").get_parameter_value().string_value
         tendon_length_2_topic = self.declare_parameter("tendon_length_topic_2", "/tendon_length_node_2").get_parameter_value().string_value
 
-        self.imu_data_subscription = self.create_subscription(Float32MultiArray, imu_data_topic, self.imu_data_callback, 10)
+        self.imu_data_subscription = self.create_subscription(Imu, imu_data_topic, self.imu_data_callback, 10)
         self.commanded_velocity_subscription = self.create_subscription(Float32MultiArray, commanded_velocity_topic, self.commanded_velocity_callback, 10)
         self.measured_velocity_subscription = self.create_subscription(Float32MultiArray, measured_velocity_topic, self.measured_velocity_callback, 10)
         self.current_consumption_subscription = self.create_subscription(Float32MultiArray, current_consumption_topic, self.current_consumption_callback, 10)
         self.tendon_length_1_subscription = self.create_subscription(Float32MultiArray, tendon_length_1_topic, self.tendon_length_1_callback, 10)
         self.tendon_length_2_subscription = self.create_subscription(Float32MultiArray, tendon_length_2_topic, self.tendon_length_2_callback, 10)
 
+        robot_rot_orientation_quat = torch.zeros(4, dtype=torch.float, device='cpu')
         model_path = self.declare_parameter('model_path', 'colon_ws/goat_shape_state_estimation/models/latest.pt').get_parameter_value().string
         self._model: ScriptModule = torch.jit.load(model_path, map_location="cpu")
-        self._input = torch.zeroes((1, 1, NUM_INPUTS), dtype=torch.float, device='cpu')
-        self._output = torch.zeroes((1, 1, NUM_OUTPUTS), dtype=torch.float, device='cpu')
+        self._input: Tensor = torch.zeroes(NUM_INPUTS, dtype=torch.float, device='cpu')
+        self._output: Tensor = torch.zeroes(NUM_OUTPUTS, dtype=torch.float, device='cpu')
 
         # Publishers
         frame_points_topic = self.declare_parameter("frame_points_topic", "/frame_points").get_parameter_value().string_value
@@ -93,18 +55,39 @@ class GoatShapeStateEstimation(Node):
 
         self.frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
         self.gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
-        self.linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
-        self.angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
+        self.linear_velocity_publisher = self.create_publisher(Float32, linear_velocity_topic, 10)
+        self.angular_velocity_publisher = self.create_publisher(Float32, angular_velocity_topic, 10)
 
         timer_period = 0.05  # seconds -> 20Hz
         self.shape_state_estimation_timer = self.create_timer(timer_period, self.shape_state_estimation_callback)
 
-    def imu_data_callback(self, msg: Float32MultiArray):
-        linear_velocity = 0.0
-        angular_velocity = 0.0
+    def imu_data_callback(self, msg: Imu):
+        quat = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
+        accel = [msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z]
+        gyro = [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
+        robot_rot_orientation_quat = torch.tensor(quat, dtype=torch.float, device=self.device)
+        robot_rot_orientation_rotmat = roma.unitquat_to_rotmat(robot_rot_orientation_quat)
+        self._input[:INDEX_GRAVITY] = robot_rot_orientation_rotmat[:, 2]  # this is essentially rot_mat * [0 0 1].T
+        self._input[INDEX_IMU_ANGULAR_VELOCITY:INDEX_LINEAR_ACCELERATION] = gyro
+        self._input[INDEX_LINEAR_ACCELERATION:INDEX_MEASURED_WHEEL_VELOCITY] = accel
+
+    def commanded_velocity_callback(self, msg: Float32MultiArray):
+        self._input[INDEX_MEASURED_WHEEL_VELOCITY:INDEX_COMMANDED_VELOCITY] = msg.data
+
+    def measured_velocity_callback(self, msg: Float32MultiArray):
+        self._input[INDEX_COMMANDED_VELOCITY:INDEX_WHEEL_CURRENT_CONSUMPTION] = msg.data
+
+    def current_consumption_callback(self, msg: Float32MultiArray):
+        self._input[INDEX_WHEEL_CURRENT_CONSUMPTION:INDEX_TENDON_LENGTH_1] = msg.data
+
+    def current_consumption_callback(self, msg: Float32):
+        self._input[INDEX_TENDON_LENGTH_1:INDEX_TENDON_LENGTH_2] = msg.data
+
+    def current_consumption_callback(self, msg: Float32):
+        self._input[INDEX_TENDON_LENGTH_2:] = msg.data
 
     def shape_state_estimation_callback(self):
-        self._output[:] = self._model(self._input).squeeze().squeeze()
+        self._output[:] = self._model(self._input.view(1, 1, -1)).view(-1)
         output_numpy = output.cpu().numpy()
 
         frame_points_msg = Float32MultiArray()
