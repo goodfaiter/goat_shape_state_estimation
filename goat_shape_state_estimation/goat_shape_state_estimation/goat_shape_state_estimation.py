@@ -1,83 +1,67 @@
 import torch
-import pandas as pd
-import numpy as np
-from helpers.data_processer import DataProcessorGoat
-from helpers.visualizer import visualize_3d_spline, plot_velocity_comparison
-
-
+from torch import ScriptModule, Tensor
+import roma
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Joy
-from std_msgs.msg import Float32MultiArray
-
-from .dynamixel_controller import Dynamixel
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Float32MultiArray, Float32
 
 
+# Constants for input indices
+INDEX_IMU_ANGULAR_VELOCITY = 3
+INDEX_LINEAR_ACCELERATION = INDEX_IMU_ANGULAR_VELOCITY + 3
+INDEX_MEASURED_WHEEL_VELOCITY = INDEX_LINEAR_ACCELERATION + 3
+INDEX_COMMANDED_VELOCITY = INDEX_MEASURED_WHEEL_VELOCITY + 4
+INDEX_WHEEL_CURRENT_CONSUMPTION = INDEX_COMMANDED_VELOCITY + 2
+INDEX_TENDON_LENGTH_1 = INDEX_WHEEL_CURRENT_CONSUMPTION + 4
+INDEX_TENDON_LENGTH_2 = INDEX_TENDON_LENGTH_1 + 1
+NUM_INPUTS = INDEX_TENDON_LENGTH_2 + 1
 
-        num_data = data["/imu/data/orientation_w"].size
-        data_tensor = torch.zeros([num_data, self.input_shape], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat = torch.zeros([num_data, 4], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 0] = torch.tensor(data["/imu/data/orientation_x"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 1] = torch.tensor(data["/imu/data/orientation_y"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 2] = torch.tensor(data["/imu/data/orientation_z"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_quat[:, 3] = torch.tensor(data["/imu/data/orientation_w"], dtype=torch.float, device=self.device)
-        robot_rot_orientation_rotmat = roma.unitquat_to_rotmat(robot_rot_orientation_quat)
-        data_tensor[:, 0:3] = robot_rot_orientation_rotmat[:, :, 2]  # this is essentially rot_mat * [0 0 1].T
-        # data_tensor[:, 0:3] = ema_2d_optimized(data_tensor[:, 0:3])
+# Constants for output indices
+NUM_POINTS = 12
+INDEX_POINTS = 0
+INDEX_GRAVITY = NUM_POINTS * 3
+INDEX_LINEAR_VELOCITY = INDEX_GRAVITY + 3
+INDEX_ANGULAR_VELOCITY = INDEX_LINEAR_VELOCITY + 3
+NUM_OUTPUTS = INDEX_ANGULAR_VELOCITY + 3
 
-        data_tensor[:, 3] = torch.tensor(data["/imu/data/angular_velocity_x"], dtype=torch.float, device=self.device)
-        data_tensor[:, 4] = torch.tensor(data["/imu/data/angular_velocity_y"], dtype=torch.float, device=self.device)
-        data_tensor[:, 5] = torch.tensor(data["/imu/data/angular_velocity_z"], dtype=torch.float, device=self.device)
-        # data_tensor[:, 3:6] = ema_2d_optimized(data_tensor[:, 3:6])
-
-        data_tensor[:, 6] = torch.tensor(data["/imu/data/linear_acceleration_x"], dtype=torch.float, device=self.device)
-        data_tensor[:, 7] = torch.tensor(data["/imu/data/linear_acceleration_y"], dtype=torch.float, device=self.device)
-        data_tensor[:, 8] = torch.tensor(data["/imu/data/linear_acceleration_z"], dtype=torch.float, device=self.device)
-        # data_tensor[:, 6:9] = ema_2d_optimized(data_tensor[:, 6:9])
-
-        data_tensor[:, 9] = torch.tensor(data["/measured_velocity/data_0"], dtype=torch.float, device=self.device)
-        data_tensor[:, 10] = torch.tensor(data["/measured_velocity/data_1"], dtype=torch.float, device=self.device)
-        data_tensor[:, 11] = torch.tensor(data["/measured_velocity/data_2"], dtype=torch.float, device=self.device)
-        data_tensor[:, 12] = torch.tensor(data["/measured_velocity/data_3"], dtype=torch.float, device=self.device)
-
-        data_tensor[:, 13] = torch.tensor(data["/commanded_velocity/data_0"], dtype=torch.float, device=self.device)
-        data_tensor[:, 14] = torch.tensor(data["/commanded_velocity/data_1"], dtype=torch.float, device=self.device)
-
-        data_tensor[:, 15] = torch.tensor(data["/current_consumption/data_0"], dtype=torch.float, device=self.device)
-        data_tensor[:, 16] = torch.tensor(data["/current_consumption/data_1"], dtype=torch.float, device=self.device)
-        data_tensor[:, 17] = torch.tensor(data["/current_consumption/data_2"], dtype=torch.float, device=self.device)
-        data_tensor[:, 18] = torch.tensor(data["/current_consumption/data_3"], dtype=torch.float, device=self.device)
-
-        data_tensor[:, 19] = torch.tensor(data["/tendon_length_node_1/tendon_length/data"], dtype=torch.float, device=self.device)
-        data_tensor[:, 20] = torch.tensor(data["/tendon_length_node_2/tendon_length/data"], dtype=torch.float, device=self.device)
-
-
-NUM_INPUTS = 21
-NUM_OUTPUTS = 12 * 3 + 3 + 3 + 3
 
 class GoatShapeStateEstimation(Node):
     def __init__(self):
-        super().__init__('goat_shape_state_estimation')
+        super().__init__("goat_shape_state_estimation")
 
         # Subscribers
         imu_data_topic = self.declare_parameter("imu_data_topic", "/imu/data").get_parameter_value().string_value
-        commanded_velocity_topic = self.declare_parameter("commanded_velocity_topic", "/commanded_velocity").get_parameter_value().string_value
+        commanded_velocity_topic = (
+            self.declare_parameter("commanded_velocity_topic", "/commanded_velocity").get_parameter_value().string_value
+        )
         measured_velocity_topic = self.declare_parameter("measured_velocity_topic", "/measured_velocity").get_parameter_value().string_value
-        current_consumption_topic = self.declare_parameter("current_consumption_topic", "/current_consumption").get_parameter_value().string_value
+        current_consumption_topic = (
+            self.declare_parameter("current_consumption_topic", "/current_consumption").get_parameter_value().string_value
+        )
         tendon_length_1_topic = self.declare_parameter("tendon_length_topic_1", "/tendon_length_node_1").get_parameter_value().string_value
         tendon_length_2_topic = self.declare_parameter("tendon_length_topic_2", "/tendon_length_node_2").get_parameter_value().string_value
 
-        self.imu_data_subscription = self.create_subscription(Float32MultiArray, imu_data_topic, self.imu_data_callback, 10)
-        self.commanded_velocity_subscription = self.create_subscription(Float32MultiArray, commanded_velocity_topic, self.commanded_velocity_callback, 10)
-        self.measured_velocity_subscription = self.create_subscription(Float32MultiArray, measured_velocity_topic, self.measured_velocity_callback, 10)
-        self.current_consumption_subscription = self.create_subscription(Float32MultiArray, current_consumption_topic, self.current_consumption_callback, 10)
-        self.tendon_length_1_subscription = self.create_subscription(Float32MultiArray, tendon_length_1_topic, self.tendon_length_1_callback, 10)
-        self.tendon_length_2_subscription = self.create_subscription(Float32MultiArray, tendon_length_2_topic, self.tendon_length_2_callback, 10)
+        self.imu_data_subscription = self.create_subscription(Imu, imu_data_topic, self.imu_data_callback, 10)
+        self.commanded_velocity_subscription = self.create_subscription(
+            Float32MultiArray, commanded_velocity_topic, self.commanded_velocity_callback, 10
+        )
+        self.measured_velocity_subscription = self.create_subscription(
+            Float32MultiArray, measured_velocity_topic, self.measured_velocity_callback, 10
+        )
+        self.current_consumption_subscription = self.create_subscription(
+            Float32MultiArray, current_consumption_topic, self.current_consumption_callback, 10
+        )
+        self.tendon_length_1_subscription = self.create_subscription(Float32, tendon_length_1_topic, self.tendon_length_1_callback, 10)
+        self.tendon_length_2_subscription = self.create_subscription(Float32, tendon_length_2_topic, self.tendon_length_2_callback, 10)
 
-        model_path = self.declare_parameter('model_path', 'colon_ws/goat_shape_state_estimation/models/latest.pt').get_parameter_value().string
-        self._model = torch.jit.load(model_path, map_location="cpu")
-        self._input = torch.zeroes((1, 1, NUM_INPUTS), dtype=torch.float, device='cpu')
-        self._output = torch.zeroes((1, 1, NUM_OUTPUTS), dtype=torch.float, device='cpu')
+        # Model initialization
+        model_path = (
+            self.declare_parameter("model_path", "colon_ws/goat_shape_state_estimation/models/latest.pt").get_parameter_value().string_value
+        )
+        self._model: ScriptModule = torch.jit.load(model_path, map_location="cpu")
+        self._input: Tensor = torch.zeros(NUM_INPUTS, dtype=torch.float32, device="cpu")
+        self._output: Tensor = torch.zeros(NUM_OUTPUTS, dtype=torch.float32, device="cpu")
 
         # Publishers
         frame_points_topic = self.declare_parameter("frame_points_topic", "/frame_points").get_parameter_value().string_value
@@ -85,29 +69,58 @@ class GoatShapeStateEstimation(Node):
         linear_velocity_topic = self.declare_parameter("linear_velocity_topic", "/linear_velocity").get_parameter_value().string_value
         angular_velocity_topic = self.declare_parameter("angular_velocity_topic", "/angular_velocity").get_parameter_value().string_value
 
-        frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
-        gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
-        linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
-        angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
+        self.frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
+        self.gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
+        self.linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
+        self.angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
 
         timer_period = 0.05  # seconds -> 20Hz
         self.shape_state_estimation_timer = self.create_timer(timer_period, self.shape_state_estimation_callback)
 
-    def imu_data_callback(self, msg: Float32MultiArray):
-        linear_velocity = 0.0
-        angular_velocity = 0.0
+    def imu_data_callback(self, msg: Imu):
+        quat = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
+        accel = [msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z]
+        gyro = [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
+
+        robot_rot_orientation_quat = torch.tensor(quat, dtype=torch.float32, device="cpu")
+        robot_rot_orientation_rotmat = roma.unitquat_to_rotmat(robot_rot_orientation_quat)
+        self._input[:INDEX_IMU_ANGULAR_VELOCITY] = robot_rot_orientation_rotmat[:, 2]  # this is essentially rot_mat * [0 0 1].T
+        self._input[INDEX_IMU_ANGULAR_VELOCITY:INDEX_LINEAR_ACCELERATION] = torch.tensor(gyro, dtype=torch.float32)
+        self._input[INDEX_LINEAR_ACCELERATION:INDEX_MEASURED_WHEEL_VELOCITY] = torch.tensor(accel, dtype=torch.float32)
+
+    def commanded_velocity_callback(self, msg: Float32MultiArray):
+        self._input[INDEX_COMMANDED_VELOCITY:INDEX_WHEEL_CURRENT_CONSUMPTION] = torch.tensor(msg.data, dtype=torch.float32)
+
+    def measured_velocity_callback(self, msg: Float32MultiArray):
+        self._input[INDEX_MEASURED_WHEEL_VELOCITY:INDEX_COMMANDED_VELOCITY] = torch.tensor(msg.data, dtype=torch.float32)
+
+    def current_consumption_callback(self, msg: Float32MultiArray):
+        self._input[INDEX_WHEEL_CURRENT_CONSUMPTION:INDEX_TENDON_LENGTH_1] = torch.tensor(msg.data, dtype=torch.float32)
+
+    def tendon_length_1_callback(self, msg: Float32):
+        self._input[INDEX_TENDON_LENGTH_1] = msg.data
+
+    def tendon_length_2_callback(self, msg: Float32):
+        self._input[INDEX_TENDON_LENGTH_2] = msg.data
 
     def shape_state_estimation_callback(self):
-        self._output[:] = self._model(self._input)
-        output_numpy = output.cpu().numpy()
+        self._output[:] = self._model(self._input.view(1, 1, -1)).view(-1)
+        output_numpy = self._output.cpu().numpy()
 
         frame_points_msg = Float32MultiArray()
         gravity_vector_msg = Float32MultiArray()
         linear_velocity_msg = Float32MultiArray()
         angular_velocity_msg = Float32MultiArray()
-        measured_velocity_msg.data = wheel_velocity
-        self.measured_velocity_publisher.publish(measured_velocity_msg)
-        # publish
+
+        frame_points_msg.data = output_numpy[:INDEX_GRAVITY].tolist()
+        gravity_vector_msg.data = output_numpy[INDEX_GRAVITY:INDEX_LINEAR_VELOCITY].tolist()
+        linear_velocity_msg.data = output_numpy[INDEX_LINEAR_VELOCITY:INDEX_ANGULAR_VELOCITY].tolist()
+        angular_velocity_msg.data = output_numpy[INDEX_ANGULAR_VELOCITY:].tolist()
+
+        self.frame_points_publisher.publish(frame_points_msg)
+        self.gravity_vector_publisher.publish(gravity_vector_msg)
+        self.linear_velocity_publisher.publish(linear_velocity_msg)
+        self.angular_velocity_publisher.publish(angular_velocity_msg)
 
 
 def main(args=None):
@@ -118,35 +131,5 @@ def main(args=None):
     rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-
-
-# Load the traced model
-traced_model = torch.jit.load("/workspace/data/output/latest_lstm_model.pt", map_location="cpu")
-# traced_model.reset()
-# data = pd.read_parquet("/workspace/data/2025_06_04/2025_06_04_16_24_22_goat_training.parquet") # c -> s -> c
-# data = pd.read_parquet("/workspace/data/2025_06_04/2025_06_04_15_52_28_goat_training.parquet") # yaw in circle mode
-data = pd.read_parquet("/workspace/data/2025_07_21/rosbag2_2025_07_21-14_16_19_goat_training.parquet") # yaw in circle mode
-# data = pd.read_parquet("/workspace/data/2025_07_21/rosbag2_2025_07_22-08_50_04_goat_training.parquet") # drive in rover
-# data = pd.read_parquet("/workspace/data/2025_06_04/2025_06_04_15_50_40_goat_training.parquet") # rov -> c
-
-device = device = torch.device("cpu")
-
-data_processor_goat = DataProcessorGoat(device)
-inputs = data_processor_goat.process_input_data(data)
-targets = data_processor_goat.process_output_data(data)
-
-num_points = 12
-estimated_points = torch.zeros([inputs.shape[0], 3 * num_points], dtype=torch.float, device=torch.device('cpu'))
-estimated_gravity = torch.zeros([inputs.shape[0], 3], dtype=torch.float, device=torch.device('cpu'))
-grav_index = num_points * 3
-estimated_velocities = torch.zeros([inputs.shape[0], 6], dtype=torch.float, device=torch.device('cpu'))
-vel_index = grav_index + 3
-
-for i in range(inputs.shape[0] - 20):
-    # sample_input = inputs[i: i + 20, :].unsqueeze(0)
-    sample_input = inputs[i, :].unsqueeze(0).unsqueeze(0)
-
-    with torch.no_grad():
-        output = traced_model(sample_input)
