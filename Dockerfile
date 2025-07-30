@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
+## Install python dependencies
 RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+RUN pip3 install roma
 
 # Create workspace
 RUN apt-get update && apt-get install -y git
