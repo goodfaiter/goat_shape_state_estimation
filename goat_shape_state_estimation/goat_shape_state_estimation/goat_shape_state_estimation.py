@@ -1,6 +1,7 @@
 import torch
 import roma
 import rclpy
+from rclpy.node import Node
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray, Float32
 
@@ -24,7 +25,7 @@ INDEX_ANGULAR_VELOCITY = INDEX_LINEAR_VELOCITY + 3
 NUM_OUTPUTS = INDEX_ANGULAR_VELOCITY + 3
 
 
-class GoatShapeStateEstimation(rclpy.Node):
+class GoatShapeStateEstimation(Node):
     def __init__(self):
         super().__init__("goat_shape_state_estimation")
 
@@ -55,7 +56,7 @@ class GoatShapeStateEstimation(rclpy.Node):
 
         # Model initialization
         model_path = (
-            self.declare_parameter("model_path", "colon_ws/goat_shape_state_estimation/models/latest.pt").get_parameter_value().string_value
+            self.declare_parameter("model_path", "/colcon_ws/src/goat_shape_state_estimation/models/latest.pt").get_parameter_value().string_value
         )
         self._model: torch.ScriptModule = torch.jit.load(model_path, map_location="cpu")
         self._input: torch.Tensor = torch.zeros(NUM_INPUTS, dtype=torch.float32, device="cpu")

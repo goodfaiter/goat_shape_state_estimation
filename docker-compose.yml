@@ -1,6 +1,6 @@
 services:
-  ros-shape-state-estimation:
-    image: ros-shape-state-estimation:humble
+  goat_shape_state_estimation:
+    image: goat_shape_state_estimation:humble
     build:
       context: .
       dockerfile: Dockerfile
