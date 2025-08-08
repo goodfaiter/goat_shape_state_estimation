@@ -74,6 +74,7 @@ class GoatShapeStateEstimation(Node):
 
         timer_period = 0.05  # seconds -> 20Hz
         self.shape_state_estimation_timer = self.create_timer(timer_period, self.shape_state_estimation_callback)
+        self.get_logger().info(f"[goat_shape_state_estimation] is up and running.")
 
     def imu_data_callback(self, msg: Imu):
         quat = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
