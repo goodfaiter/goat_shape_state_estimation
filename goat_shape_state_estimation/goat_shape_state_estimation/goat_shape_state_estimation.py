@@ -8,7 +8,8 @@ from std_msgs.msg import Float32MultiArray, Float32
 
 
 # Constants for input indices
-INDEX_IMU_ANGULAR_VELOCITY = 3
+INDEX_GRAVITY = 0
+INDEX_IMU_ANGULAR_VELOCITY = INDEX_GRAVITY + 3
 INDEX_LINEAR_ACCELERATION = INDEX_IMU_ANGULAR_VELOCITY + 3
 INDEX_MEASURED_WHEEL_VELOCITY = INDEX_LINEAR_ACCELERATION + 3
 INDEX_COMMANDED_VELOCITY = INDEX_MEASURED_WHEEL_VELOCITY + 4
@@ -83,7 +84,7 @@ class GoatShapeStateEstimation(Node):
 
         robot_rot_orientation_quat = torch.tensor(quat, dtype=torch.float32, device="cpu")
         robot_rot_orientation_rotmat = roma.unitquat_to_rotmat(robot_rot_orientation_quat)
-        self._input[:INDEX_IMU_ANGULAR_VELOCITY] = robot_rot_orientation_rotmat[:, 2]  # this is essentially rot_mat * [0 0 1].T
+        self._input[INDEX_GRAVITY:INDEX_IMU_ANGULAR_VELOCITY] = robot_rot_orientation_rotmat[:, 2]  # this is essentially rot_mat * [0 0 1].T
         self._input[INDEX_IMU_ANGULAR_VELOCITY:INDEX_LINEAR_ACCELERATION] = torch.tensor(gyro, dtype=torch.float32)
         self._input[INDEX_LINEAR_ACCELERATION:INDEX_MEASURED_WHEEL_VELOCITY] = torch.tensor(accel, dtype=torch.float32)
 
