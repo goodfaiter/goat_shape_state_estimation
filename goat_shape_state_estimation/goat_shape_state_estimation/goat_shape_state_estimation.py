@@ -3,6 +3,7 @@ import roma
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
+from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray, Float32
 
 
@@ -65,13 +66,11 @@ class GoatShapeStateEstimation(Node):
         # Publishers
         frame_points_topic = self.declare_parameter("frame_points_topic", "/frame_points").get_parameter_value().string_value
         gravity_vector_topic = self.declare_parameter("gravity_vector_topic", "/gravity_vector").get_parameter_value().string_value
-        linear_velocity_topic = self.declare_parameter("linear_velocity_topic", "/linear_velocity").get_parameter_value().string_value
-        angular_velocity_topic = self.declare_parameter("angular_velocity_topic", "/angular_velocity").get_parameter_value().string_value
+        estimated_twist_topic = self.declare_parameter("estimated_twist", "/estimated_twist").get_parameter_value().string_value
 
         self.frame_points_publisher = self.create_publisher(Float32MultiArray, frame_points_topic, 10)
         self.gravity_vector_publisher = self.create_publisher(Float32MultiArray, gravity_vector_topic, 10)
-        self.linear_velocity_publisher = self.create_publisher(Float32MultiArray, linear_velocity_topic, 10)
-        self.angular_velocity_publisher = self.create_publisher(Float32MultiArray, angular_velocity_topic, 10)
+        self.estimated_twist_publisher = self.create_publisher(Twist, estimated_twist_topic, 10)
 
         timer_period = 0.05  # seconds -> 20Hz
         self.shape_state_estimation_timer = self.create_timer(timer_period, self.shape_state_estimation_callback)
@@ -108,18 +107,22 @@ class GoatShapeStateEstimation(Node):
 
         frame_points_msg = Float32MultiArray()
         gravity_vector_msg = Float32MultiArray()
-        linear_velocity_msg = Float32MultiArray()
-        angular_velocity_msg = Float32MultiArray()
+        estimated_twist_msg = Twist()
 
         frame_points_msg.data = output_numpy[:INDEX_GRAVITY].tolist()
         gravity_vector_msg.data = output_numpy[INDEX_GRAVITY:INDEX_LINEAR_VELOCITY].tolist()
-        linear_velocity_msg.data = output_numpy[INDEX_LINEAR_VELOCITY:INDEX_ANGULAR_VELOCITY].tolist()
-        angular_velocity_msg.data = output_numpy[INDEX_ANGULAR_VELOCITY:].tolist()
+        linear_velocity = output_numpy[INDEX_LINEAR_VELOCITY:INDEX_ANGULAR_VELOCITY].tolist()
+        angular_velocity = output_numpy[INDEX_ANGULAR_VELOCITY:].tolist()
+        estimated_twist_msg.linear.x = linear_velocity[0]
+        estimated_twist_msg.linear.y = linear_velocity[1]
+        estimated_twist_msg.linear.z = linear_velocity[2]
+        estimated_twist_msg.angular.x = angular_velocity[0]
+        estimated_twist_msg.angular.y = angular_velocity[1]
+        estimated_twist_msg.angular.z = angular_velocity[2]
 
         self.frame_points_publisher.publish(frame_points_msg)
         self.gravity_vector_publisher.publish(gravity_vector_msg)
-        self.linear_velocity_publisher.publish(linear_velocity_msg)
-        self.angular_velocity_publisher.publish(angular_velocity_msg)
+        self.estimated_twist_publisher.publish(estimated_twist_msg)
 
 
 def main(args=None):
