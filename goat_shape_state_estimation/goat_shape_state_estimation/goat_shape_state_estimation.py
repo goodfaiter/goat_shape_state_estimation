@@ -39,8 +39,8 @@ class GoatShapeStateEstimation(Node):
         current_consumption_topic = (
             self.declare_parameter("current_consumption_topic", "/current_consumption").get_parameter_value().string_value
         )
-        tendon_length_1_topic = self.declare_parameter("tendon_length_topic_1", "/tendon_length_node_1").get_parameter_value().string_value
-        tendon_length_2_topic = self.declare_parameter("tendon_length_topic_2", "/tendon_length_node_2").get_parameter_value().string_value
+        tendon_length_1_topic = self.declare_parameter("tendon_length_topic_1", "/tendon_length_node_1/tendon_length").get_parameter_value().string_value
+        tendon_length_2_topic = self.declare_parameter("tendon_length_topic_2", "/tendon_length_node_2/tendon_length").get_parameter_value().string_value
 
         self.imu_data_subscription = self.create_subscription(Imu, imu_data_topic, self.imu_data_callback, 10)
         self.commanded_velocity_subscription = self.create_subscription(
